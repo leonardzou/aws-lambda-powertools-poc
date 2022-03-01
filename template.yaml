@@ -1,0 +1,289 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: demo sqs batch processing using lambda powertools
+
+Resources:
+  SnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      KmsMasterKeyId: !Ref SnsKmsKey
+
+  NoPowertoolsQueue:
+    Type: AWS::SQS::Queue
+    Properties: 
+      DelaySeconds: 0
+      KmsMasterKeyId: !Ref SqsKmsKey
+      KmsDataKeyReusePeriodSeconds: 3600 # one hour
+      MessageRetentionPeriod: 1209600 # 14 days which is max
+      ReceiveMessageWaitTimeSeconds: 10 # long polling https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html
+      RedrivePolicy: 
+        deadLetterTargetArn: !GetAtt NoPowertoolsDLQ.Arn
+        maxReceiveCount: 3
+      VisibilityTimeout: 20 # Same as lambda function timeout
+
+  NoPowertoolsDLQ:
+    Type: AWS::SQS::Queue
+    Properties: 
+      DelaySeconds: 0
+      # KmsMasterKeyId: # do not need this since:
+        # "When Amazon SQS moves a message from an encrypted source queue to an unencrypted dead-letter queue, the message remains encrypted."
+        # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-server-side-encryption.html#sqs-encryption-what-does-sse-encrypt
+      MessageRetentionPeriod: 1209600 # 14 days which is max
+      # RedriveAllowPolicy:
+      #   redrivePermission: byQueue
+      #   sourceQueueArns:
+      #     - !GetAtt NoPowertoolsQueue.Arn
+  
+  NoPowertoolsQueueSnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !GetAtt NoPowertoolsQueue.Arn
+      Protocol: sqs
+      RawMessageDelivery: true
+      TopicArn: !Ref SnsTopic
+  
+  NoPowertoolsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties: 
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Allow-Sns-SendMessage
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: "*"
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref SnsTopic
+      Queues:
+        - !Ref NoPowertoolsQueue
+
+  NoPowertoolsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: nopowertools/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - arm64
+      Timeout: 20
+      MemorySize: 256
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+      Policies:
+        # KMS permissions
+        - Version: '2012-10-17' 
+          Statement:
+            # decrypt messages from sqs queue
+            - Effect: Allow
+              Action:
+                - kms:Decrypt
+              Resource: '*' # !GetAtt KmsKey.Arn would create circular dependency
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NoPowertoolsQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+  
+  PowertoolsQueue:
+    Type: AWS::SQS::Queue
+    Properties: 
+      DelaySeconds: 0
+      KmsMasterKeyId: !Ref SqsKmsKey
+      KmsDataKeyReusePeriodSeconds: 3600 # one hour
+      MessageRetentionPeriod: 1209600 # 14 days which is max
+      ReceiveMessageWaitTimeSeconds: 10 # long polling https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html
+      RedrivePolicy: 
+        deadLetterTargetArn: !GetAtt PowertoolsDLQ.Arn
+        maxReceiveCount: 3
+      VisibilityTimeout: 20 # Same as lambda function timeout
+
+  PowertoolsDLQ:
+    Type: AWS::SQS::Queue
+    Properties: 
+      DelaySeconds: 0
+      # KmsMasterKeyId: # do not need this since:
+        # "When Amazon SQS moves a message from an encrypted source queue to an unencrypted dead-letter queue, the message remains encrypted."
+        # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-server-side-encryption.html#sqs-encryption-what-does-sse-encrypt
+      MessageRetentionPeriod: 1209600 # 14 days which is max
+      # RedriveAllowPolicy:
+      #   redrivePermission: byQueue
+      #   sourceQueueArns:
+      #     - !GetAtt PowertoolsQueue.Arn
+
+  PowertoolsQueueSnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !GetAtt PowertoolsQueue.Arn
+      Protocol: sqs
+      RawMessageDelivery: true
+      TopicArn: !Ref SnsTopic
+  
+  PowertoolsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties: 
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Allow-Sns-SendMessage
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: "*"
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref SnsTopic
+      Queues:
+        - !Ref PowertoolsQueue
+
+  PowertoolsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: powertools/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64 # required for aws-lambda-powertools python package
+      Timeout: 20
+      MemorySize: 256
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+      Policies:
+        # KMS permissions
+        - Version: '2012-10-17' 
+          Statement:
+            # decrypt messages from sqs queue
+            - Effect: Allow
+              Action:
+                - kms:Decrypt
+              Resource: '*' # !GetAtt KmsKey.Arn would create circular dependency
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt PowertoolsQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  SqsKmsKey:
+    Type: AWS::KMS::Key
+    Properties: 
+      Description: Test batch item failures cfstack SQS kms key
+      Enabled: true
+      # EnableKeyRotation: true
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyPolicy:
+        # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-key-management.html
+        Version: '2012-10-17'
+        Statement:
+        - Sid: permissions for producers
+          Effect: Allow
+          Principal:
+            Service: sns.amazonaws.com
+          Action:
+            - kms:GenerateDataKey
+            - kms:Decrypt
+          Resource: '*' 
+          Condition: 
+            ArnEquals:
+              aws:SourceArn: !Ref SnsTopic
+        - Sid: permissions for consumers
+          Effect: Allow
+          Principal:
+            AWS:
+              - !GetAtt HelloWorldFunctionRole.Arn # implicitly generated resource
+              - !GetAtt PowertoolsFunctionRole.Arn # implicitly generated resource
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:assumed-role/admin/session-name'
+          Action:
+            - kms:Decrypt
+          Resource: '*'
+        - Sid: Allow access for Key Administrators
+          # https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html#key-policy-default-allow-administrators
+          Effect: Allow
+          Principal:
+            AWS:
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:assumed-role/admin/session-name' # TODO: update to your own user's credentials
+          Action:
+            - 'kms:Create*'
+            - 'kms:Describe*'
+            - 'kms:Enable*'
+            - 'kms:List*'
+            - 'kms:Put*'
+            - 'kms:Update*'
+            - 'kms:Revoke*'
+            - 'kms:Disable*'
+            - 'kms:Get*'
+            - 'kms:Delete*'
+            - 'kms:TagResource'
+            - 'kms:UntagResource'
+            - 'kms:ScheduleKeyDeletion'
+            - 'kms:CancelKeyDeletion'
+          Resource: '*'
+
+  SqsKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: 
+      AliasName: !Sub alias/${AWS::StackName}-sqs
+      TargetKeyId: !Ref SqsKmsKey
+
+  SnsKmsKey:
+    Type: AWS::KMS::Key
+    Properties: 
+      Description: Test batch item failures cfstack SNS kms key
+      Enabled: true
+      # EnableKeyRotation: true
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyPolicy:
+        # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-key-management.html
+        Version: '2012-10-17'
+        Statement:
+        - Sid: permissions for publishers
+          Effect: Allow
+          Principal:
+            AWS:
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:assumed-role/admin/session-name' # TODO: update to your own user's credentials
+          Action:
+            - kms:GenerateDataKey
+            - kms:Decrypt
+          Resource: '*' 
+        - Sid: Allow access for Key Administrators
+          # https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html#key-policy-default-allow-administrators
+          Effect: Allow
+          Principal:
+            AWS:
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:assumed-role/admin/session-name' # TODO: update to your own user's credentials
+          Action:
+            - 'kms:Create*'
+            - 'kms:Describe*'
+            - 'kms:Enable*'
+            - 'kms:List*'
+            - 'kms:Put*'
+            - 'kms:Update*'
+            - 'kms:Revoke*'
+            - 'kms:Disable*'
+            - 'kms:Get*'
+            - 'kms:Delete*'
+            - 'kms:TagResource'
+            - 'kms:UntagResource'
+            - 'kms:ScheduleKeyDeletion'
+            - 'kms:CancelKeyDeletion'
+          Resource: '*'
+
+  SnsKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: 
+      AliasName: !Sub alias/${AWS::StackName}-sns
+      TargetKeyId: !Ref SnsKmsKey
