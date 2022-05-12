@@ -18,8 +18,9 @@ Resources:
       ReceiveMessageWaitTimeSeconds: 10 # long polling https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html
       RedrivePolicy: 
         deadLetterTargetArn: !GetAtt NoPowertoolsDLQ.Arn
-        maxReceiveCount: 3
-      VisibilityTimeout: 20 # Same as lambda function timeout
+        # https://aws.amazon.com/premiumsupport/knowledge-center/lambda-retrying-valid-sqs-messages/
+        maxReceiveCount: 5
+      VisibilityTimeout: 120 # 6x lambda function timeout
 
   NoPowertoolsDLQ:
     Type: AWS::SQS::Queue
@@ -103,8 +104,9 @@ Resources:
       ReceiveMessageWaitTimeSeconds: 10 # long polling https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html
       RedrivePolicy: 
         deadLetterTargetArn: !GetAtt PowertoolsDLQ.Arn
-        maxReceiveCount: 3
-      VisibilityTimeout: 20 # Same as lambda function timeout
+        # https://aws.amazon.com/premiumsupport/knowledge-center/lambda-retrying-valid-sqs-messages/
+        maxReceiveCount: 5
+      VisibilityTimeout: 120 # 6x lambda function timeout
 
   PowertoolsDLQ:
     Type: AWS::SQS::Queue
