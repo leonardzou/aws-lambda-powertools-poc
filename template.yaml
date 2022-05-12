@@ -247,7 +247,7 @@ Resources:
       # EnableKeyRotation: true
       KeySpec: SYMMETRIC_DEFAULT
       KeyPolicy:
-        # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-key-management.html
+        # https://docs.aws.amazon.com/sns/latest/dg/sns-enable-encryption-for-topic-sqs-queue-subscriptions.html
         Version: '2012-10-17'
         Statement:
         - Sid: permissions for publishers
